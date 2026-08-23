@@ -5,7 +5,13 @@
     width="100%"
     height="100%"
 >
-    <foreignObject id="fo" x="0" y="0" width="100%" height="100%">
+    <foreignObject
+        id="fo"
+        x="0"
+        y="0"
+        width="100%"
+        height="100%"
+    >
         <xhtml:html
             xmlns="http://www.w3.org/1999/xhtml"
             style="width:100%;height:100%;margin:0;padding:0;"
@@ -170,7 +176,9 @@
 
                 <xhtml:div id="loader">
                     <xhtml:div class="spinner"></xhtml:div>
-                    <xhtml:div id="status">Loading...</xhtml:div>
+                    <xhtml:div id="status">
+                        Loading...
+                    </xhtml:div>
                 </xhtml:div>
 
                 <xhtml:div id="error">
@@ -192,21 +200,39 @@
                     (() => {
                         "use strict";
 
+                        /*
+                         * Remote CDN file
+                         */
                         const REMOTE_URL =
                             "https://cdn.jsdelivr.net/gh/fusion-webv3/fs-static@main/index.html";
 
+                        /*
+                         * Maximum amount of time to wait for the CDN.
+                         */
                         const REQUEST_TIMEOUT = 15000;
 
-                        const iframe = document.getElementById("fm");
-                        const loader = document.getElementById("loader");
-                        const status = document.getElementById("status");
+                        const iframe =
+                            document.getElementById("fm");
 
-                        const errorScreen = document.getElementById("error");
+                        const loader =
+                            document.getElementById("loader");
+
+                        const status =
+                            document.getElementById("status");
+
+                        const errorScreen =
+                            document.getElementById("error");
+
                         const errorMessage =
                             document.getElementById("error-message");
+
                         const retryButton =
                             document.getElementById("retry");
 
+
+                        /*
+                         * Update loading text.
+                         */
                         function setLoading(message) {
                             status.textContent = message;
 
@@ -214,10 +240,18 @@
                             errorScreen.classList.remove("visible");
                         }
 
+
+                        /*
+                         * Hide loading screen.
+                         */
                         function hideLoading() {
                             loader.classList.add("hidden");
                         }
 
+
+                        /*
+                         * Display an error.
+                         */
                         function showError(message) {
                             hideLoading();
 
@@ -225,46 +259,99 @@
                             errorScreen.classList.add("visible");
                         }
 
+
+                        /*
+                         * Load the remote HTML file.
+                         */
                         async function loadRemotePage() {
                             setLoading("Connecting...");
 
-                            const controller = new AbortController();
+                            const controller =
+                                new AbortController();
 
-                            const timeout = setTimeout(() => {
-                                controller.abort();
-                            }, REQUEST_TIMEOUT);
+                            const timeout =
+                                setTimeout(() => {
+                                    controller.abort();
+                                }, REQUEST_TIMEOUT);
+
 
                             try {
-                                setLoading("Downloading content...");
+                                /*
+                                 * Generate a completely new URL
+                                 * every time the loader runs.
+                                 *
+                                 * Example:
+                                 *
+                                 * index.html?v=1787511234567
+                                 */
+                                const cacheBustedURL =
+                                    `${REMOTE_URL}?v=${Date.now()}`;
 
-                                const response = await fetch(
-                                    REMOTE_URL,
-                                    {
-                                        method: "GET",
-                                        cache: "no-store",
-                                        signal: controller.signal
-                                    }
+
+                                setLoading(
+                                    "Downloading content..."
                                 );
 
+
+                                const response =
+                                    await fetch(
+                                        cacheBustedURL,
+                                        {
+                                            method: "GET",
+
+                                            /*
+                                             * Tell the browser that
+                                             * cached content should
+                                             * not be used.
+                                             */
+                                            cache: "no-store",
+
+                                            signal:
+                                                controller.signal
+                                        }
+                                    );
+
+
+                                /*
+                                 * Check HTTP status.
+                                 */
                                 if (!response.ok) {
                                     throw new Error(
                                         `Server returned HTTP ${response.status}`
                                     );
                                 }
 
-                                setLoading("Preparing page...");
 
-                                const html = await response.text();
+                                setLoading(
+                                    "Preparing page..."
+                                );
 
+
+                                /*
+                                 * Read the CDN response.
+                                 */
+                                const html =
+                                    await response.text();
+
+
+                                /*
+                                 * Make sure we actually
+                                 * received something.
+                                 */
                                 if (!html.trim()) {
                                     throw new Error(
-                                        "The server returned an empty page."
+                                        "The CDN returned an empty page."
                                     );
                                 }
 
+
+                                /*
+                                 * Access the iframe document.
+                                 */
                                 const frameDocument =
                                     iframe.contentDocument ||
                                     iframe.contentWindow.document;
+
 
                                 if (!frameDocument) {
                                     throw new Error(
@@ -272,44 +359,76 @@
                                     );
                                 }
 
+
+                                /*
+                                 * Insert the downloaded
+                                 * HTML into the iframe.
+                                 */
                                 frameDocument.open();
+
                                 frameDocument.write(html);
+
                                 frameDocument.close();
 
+
+                                /*
+                                 * Successfully loaded.
+                                 */
                                 hideLoading();
+
                             } catch (error) {
                                 console.error(
                                     "Remote page loader error:",
                                     error
                                 );
 
-                                if (error.name === "AbortError") {
+
+                                if (
+                                    error.name ===
+                                    "AbortError"
+                                ) {
                                     showError(
-                                        "The remote page took too long to respond."
+                                        "The CDN took too long to respond."
                                     );
+
                                 } else if (
                                     error instanceof TypeError
                                 ) {
                                     showError(
                                         "The remote page could not be reached. This may be caused by a network or CORS restriction."
                                     );
+
                                 } else {
                                     showError(
                                         error.message ||
                                         "An unexpected error occurred while loading the page."
                                     );
                                 }
+
                             } finally {
                                 clearTimeout(timeout);
                             }
                         }
 
+
+                        /*
+                         * Retry button.
+                         *
+                         * Because loadRemotePage()
+                         * generates Date.now() each time,
+                         * every retry receives a new URL.
+                         */
                         retryButton.addEventListener(
                             "click",
                             loadRemotePage
                         );
 
+
+                        /*
+                         * Initial load.
+                         */
                         loadRemotePage();
+
                     })();
                     //]]>
                 </xhtml:script>
