@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-
+<base href="https://cdn.jsdelivr.net/gh/fusion-webv3/fs-static@main/">
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>FUSION</title>
@@ -764,11 +764,15 @@ function pu(i){
   return i;
 }
 
-// ── STATIC SCRAMJET PROXY ───────────────────────────────────────────────
+// ── STATIC SCRAMJET PROXY — CDN EMBED RUNTIME ───────────────────────────
+// The top-level FUSION page may be opened from file://. Native Service
+// Workers cannot be registered from that origin, so the actual Scramjet
+// runtime is bootstrapped inside the CDN-origin embed.svg context.
 let proxyReady=false;
 let sjController=null;
 let staticConn=null;
 
+const FUSION_CDN_BASE="https://cdn.jsdelivr.net/gh/fusion-webv3/fs-static@main/";
 const STATIC_BASE=new URL("./",document.baseURI).pathname;
 let STATIC_DEFAULT_WISP="wss://anura.pro/wisp/";
 let STATIC_DEFAULT_TRANSPORT="libcurl";
@@ -782,6 +786,8 @@ function normalizeWispUrl(raw){
 }
 
 async function loadStaticDefaults(){
+  // Keep the existing local/static defaults when those files are available.
+  // They are optional now because the CDN embed receives explicit config.
   try{
     const r=await fetch(STATIC_BASE+"wisp.txt",{cache:"no-store"});
     if(r.ok){
@@ -789,7 +795,7 @@ async function loadStaticDefaults(){
       const hit=text.match(/WISP\s+URL:\s*(wss?:\/\/[^\s]+)/i);
       if(hit)STATIC_DEFAULT_WISP=normalizeWispUrl(hit[1]);
     }
-  }catch(e){console.warn("[FUSION/STATIC] Could not read wisp.txt:",e);}
+  }catch(e){console.warn("[FUSION/STATIC] Could not read wisp.txt; using default CDN runtime Wisp:",e);}
 
   try{
     const r=await fetch(STATIC_BASE+"transport.txt",{cache:"no-store"});
@@ -798,7 +804,7 @@ async function loadStaticDefaults(){
       const hit=text.match(/current transport method:\s*(libcurl|epoxy)/i);
       if(hit)STATIC_DEFAULT_TRANSPORT=hit[1].toLowerCase();
     }
-  }catch(e){console.warn("[FUSION/STATIC] Could not read transport.txt:",e);}
+  }catch(e){console.warn("[FUSION/STATIC] Could not read transport.txt; using default transport:",e);}
 }
 
 function staticWisp(){
@@ -823,50 +829,39 @@ function saveStaticTransport(t){
 }
 
 function staticTransportPath(method){
-  return STATIC_BASE+"transport/"+method+".mjs";
+  return FUSION_CDN_BASE+"transport/"+method+".mjs";
 }
 
-function getSJ(){
-  return sjController;
-}
+function getSJ(){return sjController;}
 
+// Top-level pages do not encode Scramjet URLs anymore. The CDN runtime does,
+// because that is the document actually controlled by the Service Worker.
 function encUrl(url){
-  if(!sjController) return null;
-  return sjController.encodeUrl(url);
+  const params=new URLSearchParams();
+  params.set("target",String(url));
+  params.set("wisp",staticWisp());
+  params.set("transport",staticTransport());
+  params.set("v",String(Date.now()));
+  return FUSION_CDN_BASE+"embed.svg?"+params.toString();
 }
 
 async function verifyStaticTransport(){
-  if(!staticConn)return;
-  try{
-    const active=await staticConn.getTransport();
-    const label=String(active).includes("epoxy")?"epoxy":
-                String(active).includes("libcurl")?"libcurl":String(active);
-    document.documentElement.setAttribute("data-active-transport",label);
-    document.documentElement.setAttribute("data-active-transport-raw",String(active));
-    console.log("[FUSION/STATIC] Active transport:",active);
-  }catch(e){
-    console.warn("[FUSION/STATIC] Could not verify transport:",e);
-  }
+  // Transport verification happens inside each CDN embed runtime.
+  return staticTransport();
 }
 
 async function setTransport(wu,tr){
-  if(!staticConn)return;
   wu=normalizeWispUrl(wu||staticWisp());
   tr=(tr==="epoxy"||tr==="libcurl")?tr:staticTransport();
-  try{
-    await staticConn.setTransport(staticTransportPath(tr),[{wisp:wu}]);
-    saveStaticWisp(wu);
-    saveStaticTransport(tr);
-    const s=gs();
-    s.wispUrl=wu;
-    s.transport=tr;
-    s.proxy="scramjet";
-    ss(s);
-    await verifyStaticTransport();
-  }catch(e){
-    toast("Transport error: "+e.message,"error","bx-error");
-    throw e;
-  }
+  saveStaticWisp(wu);
+  saveStaticTransport(tr);
+  const s=gs();
+  s.wispUrl=wu;
+  s.transport=tr;
+  s.proxy="scramjet";
+  ss(s);
+  document.documentElement.setAttribute("data-active-transport",tr);
+  console.log("[FUSION/STATIC] CDN embed transport:",tr,"Wisp:",wu);
 }
 
 // ── NAV HISTORY — onload-based, reliable back/forward ───────────────────
@@ -876,7 +871,6 @@ async function setTransport(wu,tr){
 // by flagging it, then treat every subsequent load as a user navigation.
 
 function loadUrl(tabId, url, navAction='push'){
-  // navAction: 'push' | 'back' | 'forward' | 'replace'
   if(!proxyReady){toast("Proxy not ready","warn","bx-time");return;}
   const tab=tabs.find(t=>t.id===tabId);if(!tab)return;
 
@@ -889,78 +883,76 @@ function loadUrl(tabId, url, navAction='push'){
 
   addHist(url);
   tab.url=url;
-  tab.contentEl.innerHTML=`<div class="iframe-panel"><div class="iframe-overlay" id="ov_${tabId}"><div class="loading-spinner"></div><div class="loading-text">Routing…</div><div class="loading-dots"><span></span><span></span><span></span></div></div><iframe id="fr_${tabId}" allowfullscreen allow="fullscreen;autoplay;clipboard-write"></iframe></div>`;
+  tab._embedExpectedUrl=url;
+  tab._suppressEmbedNavigation=true;
+  tab.contentEl.innerHTML=`<div class="iframe-panel"><div class="iframe-overlay" id="ov_${tabId}"><div class="loading-spinner"></div><div class="loading-text">Routing…</div><div class="loading-dots"><span></span><span></span><span></span></div></div><iframe id="fr_${tabId}" allowfullscreen allow="fullscreen;autoplay;clipboard-read;clipboard-write;encrypted-media;picture-in-picture"></iframe></div>`;
   const fr=document.getElementById("fr_"+tabId);
   tab.iframeEl=fr;
-  tab._skipNextLoad=true; // the src= assignment below will fire onload once — skip it for history purposes
   setTL(tab,true);startBar();
 
-  function handleLoad(){
+  fr.onload=()=>{
+    // embed.svg itself has loaded. The actual proxy runtime will send a
+    // postMessage once its CDN-origin Service Worker is ready and once the
+    // proxied page navigates.
+    setTimeout(()=>{
+      if(tab.loading){
+        // Keep the loading UI until the embedded runtime confirms readiness.
+      }
+    },50);
+  };
+  fr.onerror=()=>{
     setTL(tab,false);finBar();
-
-    // Update title
-    let ti=tab.url;
-    try{ti=fr.contentDocument?.title||tab.url;}catch{}
-    if(!ti||ti===tab.url){try{ti=new URL(tab.url).hostname;}catch{ti=tab.url;}}
-    setTT(tab,ti);
-
-    // Update favicon
-    const dom=domainOf(tab.url);
-    tab.tabEl.querySelector(".tab-favicon").innerHTML=`<img src="${fav(dom,32)}" onerror="this.parentNode.innerHTML='<i class=\\'bx bx-globe\\'></i>'" loading="lazy" width="14" height="14">`;
-
-    if(activeTabId===tabId)syncChrome();
-
-    if(tab._skipNextLoad){
-      // This was the programmatic load we triggered — start watching for user navs
-      tab._skipNextLoad=false;
-      fr.onload=handleInPageLoad;
-      return;
-    }
-  }
-
-  function handleInPageLoad(){
-    // User clicked a link inside the iframe — treat as a new navigation
-    if(!navBack[tabId])navBack[tabId]=[];
-    if(!navFwd[tabId])navFwd[tabId]=[];
-    if(tab.url){
-      if(navBack[tabId][navBack[tabId].length-1]!==tab.url){
-        navBack[tabId].push(tab.url);
-      }
-    }
-    navFwd[tabId]=[];
-
-    // Try to get the new URL from the iframe
-    let newUrl=tab.url;
-    try{
-      const loc=fr.contentWindow?.location;
-      if(loc&&loc.href&&loc.href!=='about:blank'){
-        // Same-origin proxy path — just store what we know from fr.src if href is opaque
-        const h=loc.href;
-        if(h.startsWith('http')&&!h.startsWith(location.origin)){
-          newUrl=h;
-        }
-      }
-    }catch{}
-    tab.url=newUrl;
-    addHist(newUrl);
-
-    let ti=newUrl;
-    try{ti=fr.contentDocument?.title||newUrl;}catch{}
-    if(!ti||ti===newUrl){try{ti=new URL(newUrl).hostname;}catch{ti=newUrl;}}
-    setTT(tab,ti);
-    const dom=domainOf(newUrl);
-    tab.tabEl.querySelector(".tab-favicon").innerHTML=`<img src="${fav(dom,32)}" onerror="this.parentNode.innerHTML='<i class=\\'bx bx-globe\\'></i>'" loading="lazy" width="14" height="14">`;
-
-    if(activeTabId===tabId)syncChrome();
-    // stay listening for further navigations
-    fr.onload=handleInPageLoad;
-  }
-
-  fr.onload=handleLoad;
-  fr.onerror=()=>{setTL(tab,false);finBar();toast("Failed to load","error","bx-error");};
+    toast("Failed to load FUSION CDN runtime","error","bx-error");
+  };
   fr.src=encUrl(url);
   if(activeTabId===tabId)syncChrome();
 }
+
+// Messages from the CDN-origin embed runtime. The top-level file:// page
+// cannot inspect the cross-origin iframe directly, so navigation/title/state
+// are intentionally bridged with postMessage.
+window.addEventListener('message',e=>{
+  const d=e.data||{};
+  if(d.type!=="fusion-embed")return;
+  const tab=tabs.find(t=>t.iframeEl&&t.iframeEl.contentWindow===e.source);
+  if(!tab)return;
+
+  if(d.status==='ready'){
+    setTL(tab,true);
+    return;
+  }
+
+  if(d.status==='navigation'&&d.url){
+    const newUrl=String(d.url);
+    const oldUrl=tab.url;
+    if(newUrl!==oldUrl && !tab._suppressEmbedNavigation){
+      if(!navBack[tab.id])navBack[tab.id]=[];
+      if(!navFwd[tab.id])navFwd[tab.id]=[];
+      if(oldUrl && navBack[tab.id][navBack[tab.id].length-1]!==oldUrl){
+        navBack[tab.id].push(oldUrl);
+      }
+      navFwd[tab.id]=[];
+      tab.url=newUrl;
+      addHist(newUrl);
+    }
+    tab._suppressEmbedNavigation=false;
+    tab._embedExpectedUrl=newUrl;
+    setTL(tab,false);finBar();
+
+    const title=d.title||newUrl;
+    setTT(tab,title);
+    const dom=domainOf(newUrl);
+    tab.tabEl.querySelector(".tab-favicon").innerHTML=`<img src="${fav(dom,32)}" onerror="this.parentNode.innerHTML='<i class=\\'bx bx-globe\\'></i>'" loading="lazy" width="14" height="14">`;
+    if(activeTabId===tab.id)syncChrome();
+    return;
+  }
+
+  if(d.status==='error'){
+    tab._suppressEmbedNavigation=false;
+    setTL(tab,false);finBar();
+    toast("Proxy error: "+(d.detail||"runtime failed"),"error","bx-error");
+  }
+});
 
 function setTL(tab,l){
   tab.loading=l;tab.tabEl.classList.toggle("tab-loading",l);
@@ -1160,118 +1152,35 @@ document.getElementById("goBtn").addEventListener("click",e=>{
 
 // ── INIT ──────────────────────────────────────────────────────────────────
 async function initProxy(){
-  if(!("serviceWorker" in navigator)){
-    toast("Service workers not supported","error","bx-error");
-    return;
-  }
-
   try{
-    toast("Preparing Scramjet…","info","bx-time");
+    toast("Preparing FUSION CDN runtime…","info","bx-time");
     await loadStaticDefaults();
 
-    // The static repo's runtime is configured from its own root files.
-    const defaultWisp=staticWisp();
-    const defaultTransport=staticTransport();
-
-    // If an older service worker from another proxy is controlling this
-    // page, unregister it first so the static Scramjet worker owns this scope.
-    const isFirstLoad=!navigator.serviceWorker.controller;
-    if(isFirstLoad){
-      try{
-        const regs=await Promise.race([
-          navigator.serviceWorker.getRegistrations(),
-          new Promise((_,rej)=>setTimeout(()=>rej(new Error("SW lookup timed out")),5000))
-        ]);
-        await Promise.all(regs.map(r=>r.unregister()));
-      }catch(e){
-        console.warn("[FUSION/STATIC] SW cleanup skipped:",e);
-      }
-
-      try{
-        await Promise.race([
-          new Promise(resolve=>{
-            const req=indexedDB.deleteDatabase("$scramjet");
-            req.onsuccess=req.onerror=req.onblocked=resolve;
-          }),
-          new Promise(resolve=>setTimeout(resolve,5000))
-        ]);
-      }catch(e){
-        console.warn("[FUSION/STATIC] IndexedDB cleanup skipped:",e);
-      }
-    }
-
-    toast("Loading Scramjet engine…","info","bx-loader-alt");
-
-    // This is the same engine/controller initialization used by the
-    // scramjet-static repository, but kept behind the FUSION UI.
-    await import("./scramjet-engine/scramjet.js");
-
-    if(typeof $scramjetLoadController!=="function"){
-      throw new Error("Scramjet controller failed to load.");
-    }
-
-    const {ScramjetController}=$scramjetLoadController();
-
-    sjController=new ScramjetController({
-      prefix:STATIC_BASE+"scramjet/",
-      files:{
-        wasm:STATIC_BASE+"scramjet-engine/scramjet.wasm",
-        all:STATIC_BASE+"scramjet-engine/scramjet-all.js",
-        sync:STATIC_BASE+"scramjet-engine/scramjet-sync.js"
-      }
-    });
-
-    // Match the repository's service-worker initialization order.
-    if(isFirstLoad){
-      await sjController.init();
-      await navigator.serviceWorker.register(STATIC_BASE+"sw.js",{scope:STATIC_BASE});
-      await navigator.serviceWorker.ready;
-    }else{
-      await navigator.serviceWorker.register(STATIC_BASE+"sw.js",{scope:STATIC_BASE});
-      await navigator.serviceWorker.ready;
-      await sjController.init();
-    }
-
-    if(typeof _0zzl94==="undefined"||typeof _0zzl94._ak44v7!=="function"){
-      throw new Error("Static bare-mux runtime failed to load.");
-    }
-
-    staticConn=new _0zzl94._ak44v7(STATIC_BASE+"bare-mux/bare-mux-worker.js");
-
-    try{
-      await staticConn.setTransport(
-        staticTransportPath(defaultTransport),
-        [{wisp:defaultWisp}]
-      );
-    }catch(err){
-      console.warn("[FUSION/STATIC] Saved/default transport failed; falling back to libcurl:",err);
-      await staticConn.setTransport(
-        staticTransportPath("libcurl"),
-        [{wisp:defaultWisp}]
-      );
-      saveStaticTransport("libcurl");
-    }
-
-    await verifyStaticTransport();
-
-    // Keep the existing FUSION settings in sync with the static runtime.
     const s=gs();
+    const wisp=normalizeWispUrl(s.wispUrl||staticWisp());
+    const transport=(s.transport==="epoxy"||s.transport==="libcurl")?s.transport:staticTransport();
+    saveStaticWisp(wisp);
+    saveStaticTransport(transport);
+
+    // The native Service Worker lives in the HTTPS CDN-origin iframe created
+    // by embed.svg. The file:// host itself never calls register().
+    proxyReady=true;
     s.proxy="scramjet";
-    s.wispUrl=defaultWisp;
-    s.transport=staticTransport();
+    s.wispUrl=wisp;
+    s.transport=transport;
     ss(s);
+    document.documentElement.setAttribute("data-active-transport",transport);
 
     document.querySelectorAll('#proxyCards input[type=radio]').forEach(r=>{
       r.checked=r.value==="scramjet";
     });
     selCard("proxyCards","scramjet");
-    selCard("transportCards",staticTransport());
+    selCard("transportCards",transport);
     document.querySelectorAll('#transportCards input[type=radio]').forEach(r=>{
-      r.checked=r.value===staticTransport();
+      r.checked=r.value===transport;
     });
 
-    proxyReady=true;
-    toast("Proxy ready","success","bx-check-shield");
+    toast("Proxy ready — CDN runtime will start on navigation","success","bx-check-shield");
   }catch(e){
     proxyReady=false;
     console.error("[FUSION/STATIC] init error:",e);
