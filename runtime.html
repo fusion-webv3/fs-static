@@ -46,6 +46,22 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}
     });
     await sj.init();
 
+    // Create the Bare-Mux client BEFORE registering the Service Worker.
+    // Scramjet's ServiceWorker constructor asks controlled/uncontrolled
+    // clients for a SharedWorker MessagePort during startup. The listener
+    // installed by _ak44v7 must therefore already exist when register() starts
+    // the worker; otherwise the SW can fail with "All clients returned an
+    // invalid MessagePort.".
+    status.textContent='Connecting transport…';
+    if(typeof _0zzl94==='undefined'||typeof _0zzl94._ak44v7!=='function'){
+      throw new Error('Bare-Mux runtime failed to load.');
+    }
+    const conn=new _0zzl94._ak44v7(base+'bare-mux/bare-mux-worker.js');
+    const isWisp=wisp.startsWith('wss://')||wisp.startsWith('ws://');
+    const normalizedWisp=isWisp?(wisp.endsWith('/')?wisp:wisp+'/'):'wss://anura.pro/wisp/';
+    const method=transport==='epoxy'?'epoxy':'libcurl';
+    await conn.setTransport(base+'transport/'+method+'.mjs',[{wisp:normalizedWisp}]);
+
     status.textContent='Waiting for Service Worker…';
     const container=navigator.serviceWorker;
     let registration=await container.getRegistration(base);
@@ -74,16 +90,6 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}
       });
     };
     await waitForController();
-
-    status.textContent='Connecting transport…';
-    if(typeof _0zzl94==='undefined'||typeof _0zzl94._ak44v7!=='function'){
-      throw new Error('Bare-Mux runtime failed to load.');
-    }
-    const conn=new _0zzl94._ak44v7(base+'bare-mux/bare-mux-worker.js');
-    const isWisp=wisp.startsWith('wss://')||wisp.startsWith('ws://');
-    const normalizedWisp=isWisp?(wisp.endsWith('/')?wisp:wisp+'/'):'wss://anura.pro/wisp/';
-    const method=transport==='epoxy'?'epoxy':'libcurl';
-    await conn.setTransport(base+'transport/'+method+'.mjs',[{wisp:normalizedWisp}]);
 
     status.textContent='Opening proxy…';
     const encoded=sj.encodeUrl(target);

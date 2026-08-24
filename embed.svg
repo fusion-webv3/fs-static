@@ -12,37 +12,11 @@
           const transport=p.get('transport')||'libcurl';
           const send=data=>{try{window.parent.postMessage({type:'fusion-embed',...data},'*')}catch{}};
           try{
-            if(!('serviceWorker' in navigator))throw new Error('Service workers are unavailable in the CDN embed.');
             if(!target)throw new Error('No target URL supplied.');
 
-            // IMPORTANT: embed.svg itself is the CDN-origin document. Register
-            // the worker here, then wait for this CDN client to be controlled.
-            // The proxy runtime is subsequently loaded as a REAL CDN URL rather
-            // than srcdoc/about:srcdoc, so its /scramjet/* requests are eligible
-            // for Service Worker interception.
-            let registration=await navigator.serviceWorker.getRegistration(base);
-            if(!registration){
-              registration=await navigator.serviceWorker.register(base+'sw.js',{scope:base,updateViaCache:'none'});
-            }
-            await registration.update().catch(()=>{});
-
-            const waitForController=async(timeout=20000)=>{
-              if(navigator.serviceWorker.controller)return navigator.serviceWorker.controller;
-              return await new Promise((resolve,reject)=>{
-                let done=false;
-                const finish=(value,error)=>{
-                  if(done)return;done=true;clearTimeout(timer);
-                  navigator.serviceWorker.removeEventListener('controllerchange',onchange);
-                  error?reject(error):resolve(value);
-                };
-                const onchange=()=>{if(navigator.serviceWorker.controller)finish(navigator.serviceWorker.controller)};
-                const timer=setTimeout(()=>finish(null,new Error('Service Worker activated but did not take control of embed.svg.')),timeout);
-                navigator.serviceWorker.addEventListener('controllerchange',onchange);
-                if(navigator.serviceWorker.controller)finish(navigator.serviceWorker.controller);
-              });
-            };
-            await waitForController();
-
+            // Do NOT register the Service Worker from embed.svg. The embedded
+            // runtime must initialize Bare-Mux first so the SW can obtain a
+            // valid SharedWorker MessagePort as soon as it starts.
             const params=new URLSearchParams({target,wisp,transport,v:String(Date.now())});
             frame.onload=()=>send({status:'runtime-loaded'});
             frame.onerror=()=>send({status:'error',detail:'Failed to load FUSION runtime.html'});
