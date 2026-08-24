@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<base href="./">
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}
+#fusion-runtime-status{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;background:#000;font:14px system-ui,sans-serif;z-index:2}
+#fusion-runtime-status.hidden{display:none}
+</style>
+</head>
+<body>
+<div id="fusion-runtime-status">Starting FUSION…</div>
+<script>
+(async()=>{
+  const status=document.getElementById('fusion-runtime-status');
+  const qs=new URLSearchParams(location.search);
+  const target=qs.get('target')||'';
+  const wisp=qs.get('wisp')||'wss://anura.pro/wisp/';
+  const transport=qs.get('transport')||'libcurl';
+  const parentOrigin='*';
+  const send=data=>{try{if(window.parent!==window)window.parent.postMessage({type:'fusion-embed',...data},parentOrigin)}catch{}};
+
+  try{
+    if(!target)throw new Error('No target URL supplied.');
+    if(!('serviceWorker' in navigator))throw new Error('Service workers are unavailable in the CDN runtime.');
+
+    // runtime.html is a real CDN-origin document, not about:srcdoc.
+    // That distinction is required so the CDN Service Worker can control
+    // this client and intercept the /scramjet/* navigation.
+    const base=new URL('./',document.baseURI).href;
+
+    status.textContent='Loading Scramjet…';
+    await import(base+'scramjet-engine/scramjet.js');
+    await import(base+'bare-mux/bare-mux.js');
+    if(typeof $scramjetLoadController!=='function')throw new Error('Scramjet controller failed to load.');
+    const {ScramjetController}=$scramjetLoadController();
+    const sj=new ScramjetController({
+      prefix:base+'scramjet/',
+      files:{
+        wasm:base+'scramjet-engine/scramjet.wasm',
+        all:base+'scramjet-engine/scramjet-all.js',
+        sync:base+'scramjet-engine/scramjet-sync.js'
+      }
+    });
+    await sj.init();
+
+    status.textContent='Waiting for Service Worker…';
+    const container=navigator.serviceWorker;
+    let registration=await container.getRegistration(base);
+    if(!registration){
+      registration=await container.register(base+'sw.js',{scope:base,updateViaCache:'none'});
+    }
+    await registration.update().catch(()=>{});
+    await registration.active?.state==='activated';
+
+    // The worker uses clients.claim(), so a newly-created CDN-origin
+    // runtime.html client should become controlled without a reload. Wait
+    // explicitly before generating the Scramjet URL.
+    const waitForController=async(timeout=20000)=>{
+      if(container.controller)return container.controller;
+      return await new Promise((resolve,reject)=>{
+        let done=false;
+        const finish=(value,error)=>{
+          if(done)return; done=true; clearTimeout(timer);
+          container.removeEventListener('controllerchange',onchange);
+          error?reject(error):resolve(value);
+        };
+        const onchange=()=>{if(container.controller)finish(container.controller)};
+        const timer=setTimeout(()=>finish(null,new Error('Service Worker activated but did not take control of runtime.html.')),timeout);
+        container.addEventListener('controllerchange',onchange);
+        if(container.controller)finish(container.controller);
+      });
+    };
+    await waitForController();
+
+    status.textContent='Connecting transport…';
+    if(typeof _0zzl94==='undefined'||typeof _0zzl94._ak44v7!=='function'){
+      throw new Error('Bare-Mux runtime failed to load.');
+    }
+    const conn=new _0zzl94._ak44v7(base+'bare-mux/bare-mux-worker.js');
+    const isWisp=wisp.startsWith('wss://')||wisp.startsWith('ws://');
+    const normalizedWisp=isWisp?(wisp.endsWith('/')?wisp:wisp+'/'):'wss://anura.pro/wisp/';
+    const method=transport==='epoxy'?'epoxy':'libcurl';
+    await conn.setTransport(base+'transport/'+method+'.mjs',[{wisp:normalizedWisp}]);
+
+    status.textContent='Opening proxy…';
+    const encoded=sj.encodeUrl(target);
+    send({status:'ready',scope:registration.scope,script:registration.active?.scriptURL||base+'sw.js'});
+
+    // This is a real CDN-origin page, so its navigation request is now
+    // eligible for the Service Worker fetch handler.
+    location.href=encoded;
+  }catch(error){
+    console.error('[FUSION EMBED]',error);
+    status.textContent='FUSION proxy error: '+(error?.message||String(error));
+    send({status:'error',detail:error?.message||String(error)});
+  }
+})();
+</script>
+</body>
+</html>
